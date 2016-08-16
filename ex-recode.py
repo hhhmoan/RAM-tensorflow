@@ -85,7 +85,7 @@ def reinforce(l,std,is_train):
 		loc = l
 	return loc
 def gaussian_pdf(mean,sample):
-	return tf.square(sample - mean)/ (2 * reinforce_std**2)
+	return tf.square(tf.stop_gradient(sample) - mean)/ (2 * reinforce_std**2)
 def get_next_l(h,reu=None):
 	with tf.variable_scope("fb",reuse=reu):
 		w_sita_l = tf.get_variable("w_sita_l",[h_size,2])
@@ -94,7 +94,7 @@ def get_next_l(h,reu=None):
 	return l
 #######################get the input######################
 x = tf.placeholder(tf.float32,shape=(batch_size,image_size))
-label = tf.placeholder(tf.int32,shape=(batch_size,class_size))
+label = tf.placeholder(tf.int64,shape=(batch_size))
 ##################init start state,and loc################
 h = tf.zeros([batch_size,h_size])
 l_mean = [0]*glimpses
@@ -103,8 +103,8 @@ l_mean[0] = tf.zeros([batch_size,2])
 l_sample[0] = tf.zeros([batch_size,2])
 #################      main    ########################### 
 for i in range(glimpses):
-	glimpse_sensors = Glimpse_Sensor(x,tf.tanh(l_sample[i]))
-	g = Glimpse_network(glimpse_sensors,tf.tanh(l_sample[i]),reu=SHARE)
+	glimpse_sensors = Glimpse_Sensor(x,tf.stop_gradient(tf.tanh(l_sample[i])))
+	g = Glimpse_network(glimpse_sensors,tf.stop_gradient(tf.tanh(l_sample[i])),reu=SHARE)
 	h = corenetwork(h,g,reu=SHARE)
 	if i < glimpses-1:
 		l_mean[i+1] = get_next_l(h,reu=SHARE)
@@ -126,10 +126,10 @@ l_sample = tf.transpose(tf.pack(l_sample), perm = [1, 0, 2])
 l_prop = tf.reduce_mean(gaussian_pdf(l_mean,l_sample),2)
 l_prop = tf.reduce_sum(l_prop,1)
 ################  caculate loss fuction    #################
+classify_cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(a,label))
 softa = tf.nn.softmax(a)
 p_y = tf.arg_max(softa,1)
-y = tf.arg_max(label,1)
-R = tf.cast(tf.equal(p_y,y),tf.float32)
+R = tf.cast(tf.equal(p_y,label),tf.float32)
 acc = tf.reduce_sum(R)
 
 tvars = tf.trainable_variables()
@@ -137,27 +137,26 @@ l2_loss = 0.0
 for i in tvars:
 	l2_loss += tf.nn.l2_loss(i)
 
-classify_cost = -tf.reduce_mean(tf.reduce_sum(tf.log(softa+0.0000001) * tf.cast(label,tf.float32),1))
+#classify_cost = -tf.reduce_mean(tf.reduce_sum(tf.log(softa+0.0000001) * tf.cast(label,tf.float32),1))
 baseline_cost = tf.reduce_mean(tf.square(baseline - R))
 reinforce_cost = tf.reduce_mean(l_prop * (R - tf.stop_gradient(baseline)))
 loss = classify_cost
-train_op=tf.train.MomentumOptimizer(learning_rate,momentum=0.9).minimize(reinforce_cost + classify_cost+baseline_cost+l2_loss*0.0005)
+train_op=tf.train.MomentumOptimizer(learning_rate,momentum=0.9).minimize(reinforce_cost + classify_cost+baseline_cost)
 ##################train and eval#####################
 fetches = []
 fetches.extend([acc, loss, train_op])
 eval_f = []
 eval_f.extend([p_y,acc, loss])
 
-train_data = np.load("data//mnist_x.npy")
+train_data = np.load("data//data.npy")
 train_data = train_data.reshape(len(train_data),-1)
-train_label = np.load("data//mnist_label.npy")
-train_label = train_label.reshape(len(train_data),-1)
+train_label = np.load("data//label.npy")
 #get data and label,20000 images,use 18000train 2000test
 sess=tf.InteractiveSession()
 saver = tf.train.Saver() 
 tf.initialize_all_variables().run()
 #saver.restore(sess, "103model.ckpt")
-eval_len = 100
+eval_len = 200
 train_len = len(train_data) // batch_size - eval_len
 for i in range(train_epoch):
 	train_accuary = 0
